@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "MyDeskmate",
+  "version": "0.1.0",
+  "description": "B 站网课视频问答助手，提供章节导航、画面理解和可跳转的时间戳引用。",
+  "content_scripts": [
+    {
+      "matches": ["*://*.bilibili.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": [
+    "http://localhost:8000/*",
+    "http://127.0.0.1:8000/*"
+  ]
+}
