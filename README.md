@@ -49,12 +49,3 @@ python -m pytest tests/ -q
 ```
 
 测试使用临时 SQLite 数据库和模拟调用，不需要真实 API 密钥。
-
-## 项目结构
-
-```text
-backend/     API、转写、章节、检索与问答
-extension/   B 站浏览器扩展
-frontend/    本地网页界面
-tests/       核心功能测试
-```
