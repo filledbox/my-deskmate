@@ -160,6 +160,13 @@ def _short_error(msg: str, limit: int = 600) -> str:
     return f"{msg[:half]}\n…（略去 {len(msg) - 2 * half} 字）…\n{msg[-half:]}"
 
 
+def _error_text(exc: Exception) -> str:
+    """展示用错误文本：HTTPException 去掉状态码前缀，其它异常保底给类型名。"""
+    if isinstance(exc, HTTPException):
+        return str(exc.detail)
+    return str(exc).strip() or type(exc).__name__
+
+
 async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = None,
                                      extra_args: str | None = None):
 
@@ -169,6 +176,7 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
         return
     is_local = video["source_type"] == "local"
     video_path = video["file_path"]
+    lowres_path = None if is_local else video_path
 
     try:
         update_video_status(video_id, "preprocessing")
@@ -183,7 +191,24 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
             if not os.path.exists(audio_path):
                 update_progress(video_id, "downloading", 0, 0, "Downloading audio...")
                 await broadcast_progress(video_id, {"stage": "downloading", "processed_up_to": 0, "total": 0})
-                audio_path = await download_audio(video["source_url"], video_id, cookies_path, extra_args)
+                try:
+                    audio_path = await download_audio(video["source_url"], video_id, cookies_path, extra_args)
+                except HTTPException as audio_error:
+                    # 音轨 CDN 被风控时，退化为下载低清视频再本地抽音轨。
+                    update_progress(video_id, "audio_fallback", 0, 0,
+                                    "Audio stream blocked, extracting from video...")
+                    await broadcast_progress(video_id, {
+                        "stage": "audio_fallback", "processed_up_to": 0, "total": 0,
+                        "message": "音频流被拦截，改用低清视频抽取音轨",
+                    })
+                    if not (lowres_path and os.path.exists(lowres_path)):
+                        lowres_path = await download_lowres_video(
+                            video["source_url"], video_id, cookies_path, extra_args
+                        )
+                    if not lowres_path:
+                        raise audio_error from None
+                    update_video_file_path(video_id, lowres_path)
+                    audio_path = await asyncio.to_thread(extract_audio, lowres_path)
 
 
         duration = get_video_duration(audio_path)
@@ -195,7 +220,7 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
         lowres_task = None
         if not is_local:
             already_have_frames = count_keyframes(video_id) > 0
-            have_lowres_file = bool(video_path) and os.path.exists(video_path)
+            have_lowres_file = bool(lowres_path) and os.path.exists(lowres_path)
             if not already_have_frames and not have_lowres_file:
                 lowres_task = asyncio.create_task(
                     download_lowres_video(video["source_url"], video_id, cookies_path, extra_args)
@@ -246,7 +271,8 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
                 if count_keyframes(video_id) > 0:
                     frames = []
                 else:
-                    lowres_path = video_path if have_lowres_file else await lowres_task
+                    if not (lowres_path and os.path.exists(lowres_path)):
+                        lowres_path = await lowres_task
                     if lowres_path:
                         update_video_file_path(video_id, lowres_path)
                         update_progress(video_id, "keyframe_extraction", 0, duration, "Extracting keyframes...")
@@ -269,7 +295,7 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
         await broadcast_progress(video_id, {"stage": "complete", "processed_up_to": duration, "total": duration})
 
     except Exception as e:
-        short = _short_error(str(e))
+        short = _short_error(_error_text(e))
         update_video_status(video_id, "error", short)
         update_progress(video_id, "error", 0, 0, short)
         await broadcast_progress(video_id, {"stage": "error", "message": short})

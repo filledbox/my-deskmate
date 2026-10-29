@@ -334,6 +334,7 @@ function updateProgress(msg) {
   const stageNames = {
     starting: 'Starting...',
     downloading: 'Downloading audio...',
+    audio_fallback: 'Audio stream blocked, extracting from video...',
     audio_extraction: 'Extracting audio...',
     transcription: `Transcribing... covered ${formatTime(msg.processed_up_to)} / ${formatTime(msg.total)} — you can ask now`,
     keyframe_extraction: 'Extracting keyframes...',

@@ -42,6 +42,26 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000
 
 数据默认保存在本机的 `data/`，该目录不会进入 Git。使用云端服务时，音频会发送至 `.env` 指定的 ASR 服务；提问内容、检索到的转写文本和按需选取的关键帧会发送至指定的模型服务。请按视频内容的使用权限和服务商的数据政策配置。
 
+## 常见问题：B 站下载失败（HTTP 412 / 567）
+
+启动转写时如果状态栏出现 `yt-dlp 下载音频失败：B 站 CDN 触发风控（HTTP 567）` 或 `HTTP 412`，说明请求被 B 站风控拦截，和 API Key、转写服务无关。
+
+本项目默认对 B 站链接启用分块下载（`--http-chunk-size 1M`）：B 站 CDN 对不带 `Range` 的整段 GET 会返回 567，而分块请求（带 `Range`）通常能正常返回 206。若仍然失败，按顺序尝试：
+
+1. **升级 yt-dlp**：`pip install -U yt-dlp`。B 站接口改动频繁，旧版本最容易失效。
+2. **配置 cookies**：登录 B 站后导出 `cookies.txt`，在页面 Options 里填路径，或写入 `.env`：
+   ```bash
+   YT_DLP_COOKIES=~/cookies.txt
+   ```
+   也可以让 yt-dlp 直接读取浏览器 cookies（macOS 可能需要在钥匙串中允许访问）：
+   ```bash
+   YT_DLP_COOKIES_FROM_BROWSER=chrome
+   ```
+3. **换网络或代理**：例如 `YT_DLP_EXTRA_ARGS="--proxy http://127.0.0.1:7890"`；或者等待几分钟再重试。
+4. **原位重试**：在页面再次点击 Load Video，会对同一条视频重新走预处理，已保存的转写不会丢失。
+
+如果音频流始终被拦截，后端会自动退化为下载低清视频再在本地抽取音轨（状态栏显示 `Audio stream blocked, extracting from video...`），转写仍可继续。
+
 ## 测试
 
 ```bash

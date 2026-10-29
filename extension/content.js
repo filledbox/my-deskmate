@@ -490,7 +490,11 @@
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: 'url=' + encodeURIComponent(url),
       });
-      if (!resp.ok) throw new Error('后端返回 ' + resp.status);
+      if (!resp.ok) {
+        let detail = '';
+        try { detail = (await resp.json()).detail || ''; } catch (e) { /* noop */ }
+        throw new Error(detail || ('后端返回 ' + resp.status));
+      }
       const data = await resp.json();
       if (url !== lastUrl) return;
       videoId = data.video_id;
@@ -589,6 +593,8 @@
         setPrep('正在准备这节课…', 'amber', 2); break;
       case 'downloading':
         setPrep('正在听这节课…', 'amber', 5); break;
+      case 'audio_fallback':
+        setPrep('音频流被拦截，改用视频音轨…', 'amber', 6); break;
       case 'audio_extraction':
         setPrep('正在听这节课…', 'amber', 8); break;
       case 'transcription':
