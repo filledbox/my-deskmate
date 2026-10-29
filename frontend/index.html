@@ -387,15 +387,46 @@ function escapeHtml(s) {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-function renderAnswerWithCitations(raw) {
-  const re = /\[(\d{1,2}):(\d{1,2})\]/g;
+// 模型有时会把多个时刻写进一个方括号（区间或列表），如 [0:00-1:01]、[1:33, 2:35]。
+// 逐个时间点生成可点击的 .cite，同时保留原来的方括号与分隔符。
+const CITE_TIME_RE = /(\d{1,3}):(\d{2})/g;
+
+function citeHtml(min, sec, label) {
+  const seconds = parseInt(min, 10) * 60 + parseInt(sec, 10);
+  return `<span class="cite" data-time="${seconds}" title="跳转到 ${label}">${label}</span>`;
+}
+
+function renderBracketCitations(inner) {
   let html = '';
   let last = 0;
   let m;
-  while ((m = re.exec(raw))) {
+  CITE_TIME_RE.lastIndex = 0;
+  while ((m = CITE_TIME_RE.exec(inner))) {
+    html += escapeHtml(inner.slice(last, m.index));
+    html += citeHtml(m[1], m[2], m[0]);
+    last = m.index + m[0].length;
+  }
+  html += escapeHtml(inner.slice(last));
+  return html;
+}
+
+function renderAnswerWithCitations(raw) {
+  // 只处理“方括号里至少有一个 MM:SS”的片段，避免误伤普通方括号文本。
+  const bracketRe = /\[([^\[\]]*\d{1,3}:\d{2}[^\[\]]*)\]/g;
+  let html = '';
+  let last = 0;
+  let m;
+  while ((m = bracketRe.exec(raw))) {
     html += escapeHtml(raw.slice(last, m.index));
-    const seconds = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-    html += `<span class="cite" data-time="${seconds}" title="跳转到 ${m[0]}">${m[0]}</span>`;
+    const inner = m[1];
+    const times = inner.match(/(\d{1,3}):(\d{2})/g) || [];
+    if (times.length === 1 && inner.trim() === times[0]) {
+      // 单个 [MM:SS]：保持整对方括号可点，和旧行为一致。
+      const [mm, ss] = times[0].split(':');
+      html += '[' + citeHtml(mm, ss, times[0]) + ']';
+    } else {
+      html += '[' + renderBracketCitations(inner) + ']';
+    }
     last = m.index + m[0].length;
   }
   html += escapeHtml(raw.slice(last));

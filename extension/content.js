@@ -670,14 +670,40 @@
     if (conversationId) loadConversations();
   }
 
+  // 模型有时把多个时刻写进一个方括号（区间/列表），逐个时间点生成可点击的 .cite。
+  function citeSpan(min, sec, label) {
+    const seconds = parseInt(min, 10) * 60 + parseInt(sec, 10);
+    return `<span class="cite" role="button" tabindex="0" aria-label="跳转到 ${label}" data-time="${seconds}">${label}</span>`;
+  }
+
+  function renderBracketCitations(inner) {
+    let html = '', last = 0, m;
+    const re = /(\d{1,3}):(\d{2})/g;
+    while ((m = re.exec(inner))) {
+      html += esc(inner.slice(last, m.index));
+      html += citeSpan(m[1], m[2], m[0]);
+      last = m.index + m[0].length;
+    }
+    html += esc(inner.slice(last));
+    return html;
+  }
+
   function renderAnswerWithCitations(raw) {
-    const re = /\[(\d{1,2}):(\d{1,2})\]/g;
+    // 只处理“方括号里至少有一个 MM:SS”的片段，避免误伤普通方括号文本。
+    const bracketRe = /\[([^\[\]]*\d{1,3}:\d{2}[^\[\]]*)\]/g;
     const el = document.createElement('div');
     let html = '', last = 0, m;
-    while ((m = re.exec(raw))) {
+    while ((m = bracketRe.exec(raw))) {
       html += esc(raw.slice(last, m.index));
-      const seconds = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
-      html += `<span class="cite" role="button" tabindex="0" aria-label="跳转到 ${m[0]}" data-time="${seconds}">${m[0]}</span>`;
+      const inner = m[1];
+      const times = inner.match(/(\d{1,3}):(\d{2})/g) || [];
+      if (times.length === 1 && inner.trim() === times[0]) {
+        // 单个 [MM:SS]：保持整对方括号可点，和旧行为一致。
+        const [mm, ss] = times[0].split(':');
+        html += '[' + citeSpan(mm, ss, times[0]) + ']';
+      } else {
+        html += '[' + renderBracketCitations(inner) + ']';
+      }
       last = m.index + m[0].length;
     }
     html += esc(raw.slice(last));

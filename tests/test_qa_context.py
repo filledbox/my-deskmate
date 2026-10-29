@@ -11,6 +11,7 @@ from backend.qa import (
     format_chapter_catalog,
     format_context,
     merge_deduplicate,
+    CITATION_RULE,
 )
 
 
@@ -140,3 +141,8 @@ def test_format_chapter_catalog_lists_titles_and_ranges():
 
 def test_format_chapter_catalog_empty_is_empty_string():
     assert format_chapter_catalog([]) == ""
+
+
+def test_citation_rule_requires_one_timestamp_per_bracket():
+    assert "每个时刻必须单独写成 [MM:SS]" in CITATION_RULE
+    assert "不要把多个时刻合并进一个方括号" in CITATION_RULE
