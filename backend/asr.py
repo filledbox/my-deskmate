@@ -90,6 +90,10 @@ class ASRWindowError(RuntimeError):
         )
 
 
+class ASRAudioEnded(ASRWindowError):
+    """该窗口没有可解码音频：音频到此为止，不是失败。"""
+
+
 @dataclass(frozen=True)
 class ASRConfig:
     model: str
@@ -234,7 +238,7 @@ def slice_audio(audio_path: str, start: float, duration: float,
 
     if os.path.getsize(out_path) <= 44:
         os.unlink(out_path)
-        raise ASRWindowError(start, start + duration, "切片为空（没有音频流？）")
+        raise ASRAudioEnded(start, start + duration, "切片为空（没有音频流？）")
     return out_path
 
 
@@ -546,8 +550,11 @@ async def transcribe_full(audio_path: str, *,
         clip_end = min(total, coverage + TRANSCRIBE_WINDOW_SECONDS)
         if clip_end - clip_start < 1.0:
             break
-        segs, degraded = await _transcribe_span(audio_path, clip_start, clip_end,
-                                                cfg=cfg)
+        try:
+            segs, degraded = await _transcribe_span(audio_path, clip_start, clip_end,
+                                                    cfg=cfg)
+        except ASRAudioEnded:
+            break
         kept = _supersede(kept, segs)
         coverage = clip_end
         if degraded:
@@ -559,7 +566,10 @@ async def transcribe_full(audio_path: str, *,
 
 async def _all_at_once(audio_path: str, cfg: ASRConfig) -> list[dict]:
 
-    segs, _ = await _transcribe_span(audio_path, 0.0, 1e9, cfg=cfg)
+    try:
+        segs, _ = await _transcribe_span(audio_path, 0.0, 1e9, cfg=cfg)
+    except ASRAudioEnded:
+        return []
     return segs
 
 

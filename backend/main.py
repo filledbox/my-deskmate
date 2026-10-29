@@ -1,5 +1,6 @@
 import os
 import asyncio
+import logging
 import uuid
 from contextlib import asynccontextmanager
 
@@ -28,15 +29,23 @@ from .ingest import (
 )
 from .preprocess import extract_audio, extract_keyframes, AUDIO_DIR
 from .asr import (
-    ASRQuotaExhaustedError, ASRWindowError,
+    ASRAudioEnded, ASRQuotaExhaustedError, ASRWindowError,
     transcribe_full, transcribe_window,
     TRANSCRIBE_WINDOW_SECONDS, TRANSCRIBE_OVERLAP_SECONDS,
 )
 from .chapters import segment_into_chapters
 from .qa import stream_answer, stream_answer_agentic
+from . import messages
 
 BACKEND_DIR = os.path.dirname(__file__)
 FRONTEND_DIR = os.path.join(BACKEND_DIR, "..", "frontend")
+
+logger = logging.getLogger(__name__)
+
+_NOTICE_STAGES = frozenset({
+    "transcription_warning", "transcription_incomplete",
+    "no_speech", "keyframes_skipped",
+})
 
 active_connections: dict[str, list[WebSocket]] = {}
 
@@ -54,13 +63,19 @@ def _progress_payload(video: dict | None, progress: dict | None) -> dict:
             "total": total,
             "status": status,
         }
-    return {
+    payload = {
         "type": "progress",
         "stage": progress["stage"] if progress else "pending",
         "processed_up_to": progress["processed_up_to_seconds"] if progress else 0,
         "total": total,
         "status": status,
     }
+    # 刷新/重连时也要能看到失败原因或提示，而不是只显示 stage。
+    if status == "error" and video:
+        payload["message"] = messages.friendly_stored(video.get("error_message"))
+    elif progress and progress.get("stage") in _NOTICE_STAGES:
+        payload["message"] = progress.get("details")
+    return payload
 
 
 async def broadcast_progress(video_id: str, data: dict):
@@ -102,20 +117,22 @@ async def transcribe_progressively(video_id: str, audio_path: str, duration: flo
         except ASRQuotaExhaustedError:
 
             raise
+        except ASRAudioEnded as exc:
+            # 音频真的到此为止：可以跳过，但不能当成失败。
+            coverage = clip_end
+            failures = 0
+            warning = f"{exc.window_start:.0f}s 起没有讲解声，已跳过"
+            update_progress(video_id, "transcription_warning", coverage, duration, warning)
+            await broadcast_progress(video_id, {
+                "stage": "transcription_warning", "processed_up_to": coverage,
+                "total": duration,
+                "message": "这一段没有讲解声，已跳过",
+            })
+            continue
         except ASRWindowError as exc:
             if not exc.transient:
-
-
-                coverage = clip_end
-                failures = 0
-                update_progress(video_id, "transcription_warning", coverage, duration,
-                                f"{exc.window_start:.0f}s 起无音频，已跳过")
-                await broadcast_progress(video_id, {
-                    "stage": "transcription_warning", "processed_up_to": coverage,
-                    "total": duration,
-                    "message": f"{exc.window_start:.0f}s 之后没有可转写的音频",
-                })
-                continue
+                # 4xx / ffmpeg 故障不是“没有音频”，交给上层报错或标记不完整。
+                raise
 
             failures += 1
             if failures >= max_attempts:
@@ -177,6 +194,9 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
     is_local = video["source_type"] == "local"
     video_path = video["file_path"]
     lowres_path = None if is_local else video_path
+    final_stage: str | None = None
+    final_message: str | None = None
+    final_progress: float = 0.0
 
     try:
         update_video_status(video_id, "preprocessing")
@@ -238,15 +258,18 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
             if covered <= 0:
                 raise
 
-
-            short = _short_error(str(exc))
-            update_progress(video_id, "transcription_incomplete", covered, duration,
-                            f"已转写 {covered:.0f}s / {duration:.0f}s：{short}")
+            technical = _short_error(f"{type(exc).__name__}: {exc}")
+            logger.warning("video %s transcription incomplete at %.0fs: %s",
+                           video_id, covered, technical)
+            final_stage = "transcription_incomplete"
+            message = f"{messages.INCOMPLETE}（已转写 {covered:.0f}s / {duration:.0f}s）"
+            final_progress = covered
+            final_message = message
+            update_progress(video_id, final_stage, covered, duration, message)
             await broadcast_progress(video_id, {
-                "stage": "transcription_incomplete",
+                "stage": final_stage,
                 "processed_up_to": covered, "total": duration,
-                "message": f"转写中断在 {covered:.0f}s（共 {duration:.0f}s），"
-                           "已覆盖部分仍可提问",
+                "message": message,
             })
         segments = get_all_transcript_segments(video_id)
 
@@ -278,27 +301,65 @@ async def run_preprocessing_pipeline(video_id: str, cookies_path: str | None = N
                         update_progress(video_id, "keyframe_extraction", 0, duration, "Extracting keyframes...")
                         await broadcast_progress(video_id, {"stage": "keyframe_extraction", "processed_up_to": 0, "total": duration})
                         frames = await asyncio.to_thread(extract_keyframes, lowres_path)
+                    elif final_stage is None:
+                        final_stage = "keyframes_skipped"
+                        final_progress = duration
+                        final_message = messages.KEYFRAMES_SKIPPED
+                        update_progress(video_id, "keyframes_skipped", duration, duration,
+                                        messages.KEYFRAMES_SKIPPED)
+                        await broadcast_progress(video_id, {
+                            "stage": "keyframes_skipped", "processed_up_to": duration,
+                            "total": duration, "message": messages.KEYFRAMES_SKIPPED,
+                        })
         except Exception as e:
-            update_progress(video_id, "keyframes_skipped", duration, duration,
-                            f"keyframes skipped: {_short_error(str(e), 200)}")
-            await broadcast_progress(video_id, {
-                "stage": "keyframes_skipped", "processed_up_to": duration, "total": duration,
-                "message": "未能抽取关键帧，本视频以纯语音模式问答（画面相关问题会答不了）。",
-            })
+            technical = _short_error(f"{type(e).__name__}: {e}", 200)
+            logger.warning("video %s keyframes failed: %s", video_id, technical)
+            if final_stage is None:
+                final_stage = "keyframes_skipped"
+                final_progress = duration
+                final_message = messages.KEYFRAMES_SKIPPED
+                update_progress(video_id, "keyframes_skipped", duration, duration,
+                                messages.KEYFRAMES_SKIPPED)
+                await broadcast_progress(video_id, {
+                    "stage": "keyframes_skipped", "processed_up_to": duration,
+                    "total": duration, "message": messages.KEYFRAMES_SKIPPED,
+                })
 
         if frames:
             insert_keyframes(video_id, frames)
 
 
-        update_progress(video_id, "complete", duration, duration)
+        if not segments:
+            # 没有硬失败却 0 段：静音/没有语音，不是 error。
+            has_frames = count_keyframes(video_id) > 0
+            message = messages.NO_SPEECH_WITH_FRAMES if has_frames else messages.NO_SPEECH
+            update_progress(video_id, "no_speech", duration, duration, message)
+            update_video_status(video_id, "ready")
+            await broadcast_progress(video_id, {
+                "stage": "no_speech", "processed_up_to": duration,
+                "total": duration, "message": message,
+            })
+            return
+
+        if final_stage is None:
+            update_progress(video_id, "complete", duration, duration)
+            await broadcast_progress(video_id, {"stage": "complete", "processed_up_to": duration, "total": duration})
+        else:
+            # 关键帧阶段可能又写了一条进度，这里把最终提示放回最后。
+            update_progress(video_id, final_stage, final_progress, duration, final_message)
+            await broadcast_progress(video_id, {
+                "stage": final_stage, "processed_up_to": final_progress,
+                "total": duration, "message": final_message,
+            })
         update_video_status(video_id, "ready")
-        await broadcast_progress(video_id, {"stage": "complete", "processed_up_to": duration, "total": duration})
 
     except Exception as e:
-        short = _short_error(_error_text(e))
-        update_video_status(video_id, "error", short)
-        update_progress(video_id, "error", 0, 0, short)
-        await broadcast_progress(video_id, {"stage": "error", "message": short})
+        technical = _short_error(f"{type(e).__name__}: {_error_text(e)}")
+        friendly = messages.friendly_error(e)
+        logger.warning("video %s preprocessing failed: %s", video_id, technical)
+        update_video_status(video_id, "error", friendly)
+        update_progress(video_id, "error", 0, 0, technical)
+        await broadcast_progress(video_id, {"stage": "error", "message": friendly})
 
 
 @asynccontextmanager
@@ -355,7 +416,12 @@ async def create_video(url: str = Form(None), file: UploadFile = File(None),
                 "reused": True,
                 "retry_started": retry_started,
             }
-        extractor_key, title = await probe_video(url, cookies_path, extra_args)
+        try:
+            extractor_key, title = await probe_video(url, cookies_path, extra_args)
+        except HTTPException as exc:
+            technical = _short_error(f"{type(exc).__name__}: {exc.detail}")
+            logger.warning("probe failed for %s: %s", url, technical)
+            raise HTTPException(500, messages.friendly_error(exc)) from exc
         video_id = str(uuid.uuid4())[:8]
         video_path = ""
         source_type = normalize_source_type(extractor_key)
@@ -389,7 +455,8 @@ async def get_video_info(video_id: str):
         "title": video["title"],
         "status": video["status"],
         "duration_seconds": video["duration_seconds"],
-        "error_message": video.get("error_message"),
+        "error_message": (messages.friendly_stored(video["error_message"])
+                          if video.get("error_message") else None),
         "file_ready": media_file_exists(video.get("file_path")),
     }
 

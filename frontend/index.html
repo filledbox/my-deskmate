@@ -153,7 +153,7 @@ async function loadExistingVideo(vid) {
     connectWebSocket(vid);
     loadLatestConversation(vid);
   } catch (err) {
-    alert('Error: ' + err.message);
+    alert(err.message || '这节课我没准备好，请稍后重新加载一次。');
     document.getElementById('load-btn').disabled = false;
     document.getElementById('load-btn').textContent = 'Load Video';
   }
@@ -257,7 +257,7 @@ async function loadVideo() {
     loadLatestConversation(videoId);
     waitForFileReady(videoId);
   } catch (err) {
-    alert('Error: ' + err.message);
+    alert(err.message || '这节课我没准备好，请稍后重新加载一次。');
   } finally {
     document.getElementById('load-btn').disabled = false;
     document.getElementById('load-btn').textContent = 'Load Video';
@@ -339,9 +339,19 @@ function updateProgress(msg) {
     transcription: `Transcribing... covered ${formatTime(msg.processed_up_to)} / ${formatTime(msg.total)} — you can ask now`,
     keyframe_extraction: 'Extracting keyframes...',
     complete: 'Preprocessing complete',
-    error: 'Error: ' + (msg.message || 'Unknown error'),
+    no_speech: 'No speech detected',
+    transcription_incomplete: 'Transcription incomplete',
+    transcription_warning: 'Skipped a silent section',
+    keyframes_skipped: 'Keyframes skipped',
+    error: '这节课我没准备好，请稍后重新加载一次。',
   };
-  status.textContent = stageNames[msg.stage] || msg.stage;
+  const noticeStages = ['error', 'no_speech', 'transcription_incomplete',
+                        'transcription_warning', 'keyframes_skipped'];
+  if (msg.message && noticeStages.includes(msg.stage)) {
+    status.textContent = msg.message;
+  } else {
+    status.textContent = stageNames[msg.stage] || msg.stage;
+  }
 }
 
 let currentAnswerEl = null;

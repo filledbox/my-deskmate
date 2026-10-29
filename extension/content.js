@@ -603,8 +603,14 @@
         setPrep('正在看板书…', 'green', 95); break;
       case 'complete':
         setPrep(null, 'green'); break;
+      case 'no_speech':
+      case 'transcription_incomplete':
+      case 'transcription_warning':
+      case 'keyframes_skipped':
+        setPrep(msg.message || '这节课没有讲解声，暂时没法根据内容回答。', 'amber', pct);
+        break;
       case 'error':
-        setPrep('这节课没准备好，没法基于内容回答。', 'red', 0, msg.message || '');
+        setPrep(msg.message || '这节课我没准备好，请稍后重新加载一次。', 'red', 0);
         break;
       default:
         if (msg.stage) setPrep('正在准备这节课…', 'amber', pct);

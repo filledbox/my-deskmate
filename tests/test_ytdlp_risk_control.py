@@ -162,5 +162,6 @@ def test_pipeline_keeps_audio_error_when_fallback_also_fails(tmp_db, tmp_path, m
 
     row = memory.get_video("fb2")
     assert row["status"] == "error"
-    assert "567" in row["error_message"]
-    assert "风控" in row["error_message"]
+    # 用户只看友好文案；技术原因留在进度详情里给开发者。
+    assert "B 站" in row["error_message"]
+    assert "567" in memory.get_latest_progress("fb2")["details"]
