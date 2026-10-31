@@ -163,3 +163,28 @@ def test_ready_video_without_progress_history_sends_complete(tmp_db):
             }
             ws.send_json({"type": "ping"})
             assert ws.receive_json()["stage"] == "complete"
+
+
+def test_retry_endpoint_preserves_local_video_and_schedules_once(tmp_db, monkeypatch):
+    memory.update_video_status("v1", "error", "failed")
+    memory.create_conversation("v1", "保留会话")
+    tasks = _capture_tasks(monkeypatch)
+    with TestClient(main.app) as client:
+        first = client.post("/api/videos/v1/retry")
+        second = client.post("/api/videos/v1/retry")
+        assert first.json() == {"video_id": "v1", "retry_started": True}
+        assert second.json()["retry_started"] is False
+        assert client.get("/api/videos/v1/progress").json()["progress"]["stage"] == "starting"
+    assert len(tasks) == 1
+    assert memory.get_video("v1")["error_message"] is None
+    with memory.get_db() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM conversations WHERE video_id = 'v1'").fetchone()[0] == 1
+
+
+def test_retry_endpoint_missing_and_ready_video(tmp_db, monkeypatch):
+    memory.update_video_status("v1", "ready")
+    tasks = _capture_tasks(monkeypatch)
+    with TestClient(main.app) as client:
+        assert client.post("/api/videos/missing/retry").status_code == 404
+        assert client.post("/api/videos/v1/retry").json()["retry_started"] is False
+    assert not tasks

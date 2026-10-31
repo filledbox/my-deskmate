@@ -58,7 +58,7 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000
    YT_DLP_COOKIES_FROM_BROWSER=chrome
    ```
 3. **换网络或代理**：例如 `YT_DLP_EXTRA_ARGS="--proxy http://127.0.0.1:7890"`；或者等待几分钟再重试。
-4. **原位重试**：在页面再次点击 Load Video，会对同一条视频重新走预处理，已保存的转写不会丢失。
+4. **原位重试**：预处理失败后，在扩展面板或本地页面点击“重试预处理”。重试保留同一视频、已有转写和会话；本地上传文件也无需重新上传。本地页面可先在 Options 中更新 cookies 等下载选项。
 
 如果音频流始终被拦截，后端会自动退化为下载低清视频再在本地抽取音轨（状态栏显示 `Audio stream blocked, extracting from video...`），转写仍可继续。
 
@@ -69,3 +69,7 @@ python -m pytest tests/ -q
 ```
 
 测试使用临时 SQLite 数据库和模拟调用，不需要真实 API 密钥。
+
+## 开源许可
+
+本项目采用 [MIT License](LICENSE)。

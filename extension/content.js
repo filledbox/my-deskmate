@@ -153,6 +153,7 @@
           <div id="chapter-list"></div>
           <div id="prep">
             <div id="prep-text"></div>
+            <button id="retry-btn" hidden>重试预处理</button>
             <div id="pbar"><div id="pfill"></div></div>
           </div>
           <div id="messages"></div>
@@ -572,6 +573,7 @@
   }
 
   function setPrep(text, dotCls, pct, detail) {
+    $('#retry-btn').hidden = true;
     setDot(dotCls || '');
     if (text === null) { prepEl.classList.remove('show'); return; }
     prepEl.classList.add('show');
@@ -611,12 +613,32 @@
         break;
       case 'error':
         setPrep(msg.message || '这节课我没准备好，请稍后重新加载一次。', 'red', 0);
+        $('#retry-btn').hidden = false;
         break;
       default:
         if (msg.stage) setPrep('正在准备这节课…', 'amber', pct);
         break;
     }
   }
+
+  $('#retry-btn').addEventListener('click', async () => {
+    const vid = videoId;
+    if (!vid || $('#retry-btn').disabled) return;
+    $('#retry-btn').disabled = true;
+    try {
+      const resp = await fetch(`${backendBase}/api/videos/${vid}/retry`, { method: 'POST' });
+      if (!resp.ok) throw new Error('HTTP ' + resp.status);
+      await resp.json();
+      if (vid === videoId) connectWS(vid);
+    } catch (err) {
+      if (vid === videoId) {
+        setPrep('重试请求失败，请再次点击重试。', 'red', 0, err.message);
+        $('#retry-btn').hidden = false;
+      }
+    } finally {
+      $('#retry-btn').disabled = false;
+    }
+  });
 
   function sendQuestion() {
     const question = qInput.value.trim();

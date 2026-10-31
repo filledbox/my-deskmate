@@ -445,6 +445,20 @@ async def create_video(url: str = Form(None), file: UploadFile = File(None),
     }
 
 
+@app.post("/api/videos/{video_id}/retry")
+async def retry_video(video_id: str, cookies_path: str = Form(None),
+                      extra_args: str = Form(None)):
+    video = get_video(video_id)
+    if not video:
+        raise HTTPException(404, "Video not found")
+    retry_started = claim_video_retry(video_id)
+    if retry_started:
+        update_progress(video_id, "starting", 0, 0, "Retrying preprocessing...")
+        await broadcast_progress(video_id, {"stage": "starting", "processed_up_to": 0, "total": 0})
+        asyncio.create_task(run_preprocessing_pipeline(video_id, cookies_path, extra_args))
+    return {"video_id": video_id, "retry_started": retry_started}
+
+
 @app.get("/api/videos/{video_id}")
 async def get_video_info(video_id: str):
     video = get_video(video_id)

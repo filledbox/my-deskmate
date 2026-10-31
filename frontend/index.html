@@ -84,6 +84,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; b
 
 <div id="progress-area">
   <span id="status-text"></span>
+  <button id="retry-btn" hidden onclick="retryVideo()">重试预处理</button>
   <div id="progress-bar"><div id="progress-fill"></div></div>
 </div>
 
@@ -264,6 +265,34 @@ async function loadVideo() {
   }
 }
 
+async function retryVideo() {
+  const vid = videoId;
+  const button = document.getElementById('retry-btn');
+  if (!vid || button.disabled) return;
+  button.disabled = true;
+  const form = new FormData();
+  const cookies = document.getElementById('cookies-input').value.trim();
+  const extraArgs = document.getElementById('extraargs-input').value.trim();
+  if (cookies) form.append('cookies_path', cookies);
+  if (extraArgs) form.append('extra_args', extraArgs);
+  try {
+    const resp = await fetch(`/api/videos/${vid}/retry`, { method: 'POST', body: form });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    await resp.json();
+    if (vid === videoId) {
+      connectWebSocket(vid);
+      waitForFileReady(vid);
+    }
+  } catch (err) {
+    if (vid === videoId) {
+      document.getElementById('status-text').textContent = '重试请求失败，请再次点击重试。';
+      button.hidden = false;
+    }
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function waitForFileReady(vid) {
   for (let i = 0; i < 600; i++) {
     let info;
@@ -325,6 +354,7 @@ function connectWebSocket(vid) {
 }
 
 function updateProgress(msg) {
+  document.getElementById('retry-btn').hidden = msg.stage !== 'error';
   const fill = document.getElementById('progress-fill');
   const status = document.getElementById('status-text');
   const total = msg.total || 1;
